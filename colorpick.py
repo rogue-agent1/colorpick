@@ -1,87 +1,69 @@
 #!/usr/bin/env python3
-"""colorpick - Color format converter and palette tool.
+"""colorpick - Color conversion and palette toolkit.
 
-One file. Zero deps. Speaks color.
-
-Usage:
-  colorpick.py "#ff6600"                → all formats
-  colorpick.py "rgb(255,102,0)"         → all formats
-  colorpick.py "hsl(24,100%,50%)"       → all formats
-  colorpick.py red                      → named color
-  colorpick.py mix "#ff0000" "#0000ff"  → blend colors
-  colorpick.py palette "#ff6600" 5      → generate palette
-  colorpick.py contrast "#fff" "#000"   → contrast ratio
+Convert between color formats, generate palettes, analyze contrast. Zero deps.
 """
 
 import argparse
 import colorsys
-import json
+import math
 import re
 import sys
 
-NAMED = {
-    "black": (0,0,0), "white": (255,255,255), "red": (255,0,0),
-    "green": (0,128,0), "blue": (0,0,255), "yellow": (255,255,0),
-    "cyan": (0,255,255), "magenta": (255,0,255), "orange": (255,165,0),
-    "purple": (128,0,128), "pink": (255,192,203), "brown": (165,42,42),
-    "gray": (128,128,128), "grey": (128,128,128), "lime": (0,255,0),
-    "navy": (0,0,128), "teal": (0,128,128), "olive": (128,128,0),
-    "maroon": (128,0,0), "silver": (192,192,192), "coral": (255,127,80),
-    "salmon": (250,128,114), "gold": (255,215,0), "indigo": (75,0,130),
-    "violet": (238,130,238), "turquoise": (64,224,208), "tan": (210,180,140),
-    "tomato": (255,99,71), "skyblue": (135,206,235), "plum": (221,160,221),
-}
+
+def hex_to_rgb(h):
+    h = h.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
 
 
-def parse_color(s: str) -> tuple[int, int, int]:
-    s = s.strip().lower()
+def rgb_to_hex(r, g, b):
+    return f"#{r:02X}{g:02X}{b:02X}"
 
-    if s in NAMED:
-        return NAMED[s]
 
-    # Hex
-    m = re.match(r'^#?([0-9a-f]{6})$', s)
-    if m:
-        h = m.group(1)
-        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+def rgb_to_hsl(r, g, b):
+    h, l, s = colorsys.rgb_to_hls(r/255, g/255, b/255)
+    return round(h * 360), round(s * 100), round(l * 100)
 
-    m = re.match(r'^#?([0-9a-f]{3})$', s)
-    if m:
-        h = m.group(1)
-        return int(h[0]*2, 16), int(h[1]*2, 16), int(h[2]*2, 16)
 
-    # rgb(r, g, b)
-    m = re.match(r'rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', s)
+def hsl_to_rgb(h, s, l):
+    r, g, b = colorsys.hls_to_rgb(h/360, l/100, s/100)
+    return round(r * 255), round(g * 255), round(b * 255)
+
+
+def parse_color(s):
+    s = s.strip()
+    if s.startswith("#") or re.match(r'^[0-9a-fA-F]{3,6}$', s):
+        return hex_to_rgb(s)
+    m = re.match(r'rgb\((\d+),\s*(\d+),\s*(\d+)\)', s)
     if m:
         return int(m.group(1)), int(m.group(2)), int(m.group(3))
-
-    # hsl(h, s%, l%)
-    m = re.match(r'hsl\(\s*(\d+)\s*,\s*(\d+)%?\s*,\s*(\d+)%?\s*\)', s)
+    m = re.match(r'hsl\((\d+),\s*(\d+)%?,\s*(\d+)%?\)', s)
     if m:
-        h, sat, l = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        r, g, b = colorsys.hls_to_rgb(h / 360, l / 100, sat / 100)
-        return int(r * 255), int(g * 255), int(b * 255)
-
+        return hsl_to_rgb(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    # Named colors
+    names = {"red": (255,0,0), "green": (0,128,0), "blue": (0,0,255),
+             "white": (255,255,255), "black": (0,0,0), "yellow": (255,255,0),
+             "cyan": (0,255,255), "magenta": (255,0,255), "orange": (255,165,0),
+             "purple": (128,0,128), "pink": (255,192,203), "gray": (128,128,128)}
+    if s.lower() in names:
+        return names[s.lower()]
     raise ValueError(f"Cannot parse color: {s}")
 
 
-def rgb_to_hex(r, g, b) -> str:
-    return f"#{r:02x}{g:02x}{b:02x}"
+def swatch(r, g, b):
+    return f"\033[48;2;{r};{g};{b}m    \033[0m"
 
 
-def rgb_to_hsl(r, g, b) -> tuple[int, int, int]:
-    h, l, s = colorsys.rgb_to_hls(r/255, g/255, b/255)
-    return int(h * 360), int(s * 100), int(l * 100)
-
-
-def luminance(r, g, b) -> float:
+def luminance(r, g, b):
     def lin(c):
         c = c / 255
-        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
     return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
 
 
-def contrast_ratio(c1, c2) -> float:
+def contrast_ratio(c1, c2):
     l1 = luminance(*c1)
     l2 = luminance(*c2)
     lighter = max(l1, l2)
@@ -89,112 +71,98 @@ def contrast_ratio(c1, c2) -> float:
     return (lighter + 0.05) / (darker + 0.05)
 
 
-def swatch(r, g, b) -> str:
-    return f"\033[48;2;{r};{g};{b}m    \033[0m"
-
-
-def show_color(r, g, b, label=""):
-    h, s, l = rgb_to_hsl(r, g, b)
-    hex_c = rgb_to_hex(r, g, b)
-    if label:
-        print(f"  {label}")
-    print(f"  {swatch(r,g,b)} {hex_c}  rgb({r},{g},{b})  hsl({h},{s}%,{l}%)")
-
-
 def cmd_convert(args):
-    try:
-        r, g, b = parse_color(args.color)
-    except ValueError as e:
-        print(e, file=sys.stderr)
-        return 1
-    if args.json:
-        h, s, l = rgb_to_hsl(r, g, b)
-        print(json.dumps({"hex": rgb_to_hex(r,g,b), "rgb": [r,g,b], "hsl": [h,s,l]}))
-    else:
-        show_color(r, g, b)
-    return 0
+    r, g, b = parse_color(args.color)
+    h, s, l = rgb_to_hsl(r, g, b)
+    hsv_h, hsv_s, hsv_v = colorsys.rgb_to_hsv(r/255, g/255, b/255)
 
-
-def cmd_mix(args):
-    try:
-        c1 = parse_color(args.color1)
-        c2 = parse_color(args.color2)
-    except ValueError as e:
-        print(e, file=sys.stderr)
-        return 1
-    ratio = args.ratio
-    r = int(c1[0] * (1-ratio) + c2[0] * ratio)
-    g = int(c1[1] * (1-ratio) + c2[1] * ratio)
-    b = int(c1[2] * (1-ratio) + c2[2] * ratio)
-    show_color(r, g, b, f"Mix ({int((1-ratio)*100)}:{int(ratio*100)})")
-    return 0
+    print(f"  {swatch(r, g, b)} {rgb_to_hex(r, g, b)}")
+    print(f"  HEX:  {rgb_to_hex(r, g, b)}")
+    print(f"  RGB:  rgb({r}, {g}, {b})")
+    print(f"  HSL:  hsl({h}, {s}%, {l}%)")
+    print(f"  HSV:  hsv({round(hsv_h*360)}, {round(hsv_s*100)}%, {round(hsv_v*100)}%)")
+    print(f"  Lum:  {luminance(r, g, b):.4f}")
 
 
 def cmd_palette(args):
-    try:
-        r, g, b = parse_color(args.color)
-    except ValueError as e:
-        print(e, file=sys.stderr)
-        return 1
-    h, l, s = colorsys.rgb_to_hls(r/255, g/255, b/255)
-    n = args.count
-    for i in range(n):
-        new_h = (h + i / n) % 1.0
-        nr, ng, nb = colorsys.hls_to_rgb(new_h, l, s)
-        show_color(int(nr*255), int(ng*255), int(nb*255))
-    return 0
+    r, g, b = parse_color(args.color)
+    h, s, l = rgb_to_hsl(r, g, b)
+    n = args.count or 5
+
+    if args.type == "complement":
+        colors = [(h, s, l), ((h + 180) % 360, s, l)]
+    elif args.type == "analogous":
+        colors = [((h + i * 30) % 360, s, l) for i in range(-1, 2)]
+    elif args.type == "triadic":
+        colors = [((h + i * 120) % 360, s, l) for i in range(3)]
+    elif args.type == "shades":
+        colors = [(h, s, max(5, l - i * (l // n))) for i in range(n)]
+    elif args.type == "tints":
+        colors = [(h, s, min(95, l + i * ((100 - l) // n))) for i in range(n)]
+    else:  # monochromatic
+        step = 80 // n
+        start = max(10, l - (n // 2) * step)
+        colors = [(h, s, min(95, start + i * step)) for i in range(n)]
+
+    print(f"  {args.type} palette from {rgb_to_hex(r, g, b)}:\n")
+    for ch, cs, cl in colors:
+        cr, cg, cb = hsl_to_rgb(ch, cs, cl)
+        print(f"  {swatch(cr, cg, cb)} {rgb_to_hex(cr, cg, cb)}  hsl({ch}, {cs}%, {cl}%)")
 
 
 def cmd_contrast(args):
-    try:
-        c1 = parse_color(args.fg)
-        c2 = parse_color(args.bg)
-    except ValueError as e:
-        print(e, file=sys.stderr)
-        return 1
+    c1 = parse_color(args.fg)
+    c2 = parse_color(args.bg)
     ratio = contrast_ratio(c1, c2)
-    aa_normal = "✓" if ratio >= 4.5 else "✗"
-    aa_large = "✓" if ratio >= 3.0 else "✗"
-    aaa_normal = "✓" if ratio >= 7.0 else "✗"
-    print(f"  Contrast ratio: {ratio:.2f}:1")
-    print(f"  AA  normal: {aa_normal}  large: {aa_large}")
-    print(f"  AAA normal: {aaa_normal}")
-    return 0
+
+    print(f"  FG: {rgb_to_hex(*c1)} {swatch(*c1)}")
+    print(f"  BG: {rgb_to_hex(*c2)} {swatch(*c2)}")
+    print(f"  Ratio: {ratio:.2f}:1")
+    print(f"  AA Normal:  {'✓' if ratio >= 4.5 else '✗'} (need 4.5:1)")
+    print(f"  AA Large:   {'✓' if ratio >= 3.0 else '✗'} (need 3.0:1)")
+    print(f"  AAA Normal: {'✓' if ratio >= 7.0 else '✗'} (need 7.0:1)")
+    print(f"  AAA Large:  {'✓' if ratio >= 4.5 else '✗'} (need 4.5:1)")
+
+
+def cmd_mix(args):
+    c1 = parse_color(args.color1)
+    c2 = parse_color(args.color2)
+    ratio = args.ratio or 50
+    t = ratio / 100
+    r = round(c1[0] * (1-t) + c2[0] * t)
+    g = round(c1[1] * (1-t) + c2[1] * t)
+    b = round(c1[2] * (1-t) + c2[2] * t)
+    print(f"  {swatch(*c1)} {rgb_to_hex(*c1)} + {swatch(*c2)} {rgb_to_hex(*c2)}")
+    print(f"  = {swatch(r, g, b)} {rgb_to_hex(r, g, b)} ({ratio}% mix)")
 
 
 def main():
-    argv = sys.argv[1:]
-    subcmds = {"mix", "palette", "contrast"}
+    p = argparse.ArgumentParser(description="Color toolkit")
+    sub = p.add_subparsers(dest="cmd")
 
-    if argv and argv[0] not in subcmds and argv[0] not in ('-h', '--help'):
-        parser = argparse.ArgumentParser()
-        parser.add_argument("color")
-        parser.add_argument("--json", action="store_true")
-        args = parser.parse_args(argv)
-        return cmd_convert(args)
+    sub.add_parser("convert", help="Convert color formats").add_argument("color")
 
-    parser = argparse.ArgumentParser(description="Color format converter")
-    sub = parser.add_subparsers(dest="command")
+    pp = sub.add_parser("palette", help="Generate palette")
+    pp.add_argument("color")
+    pp.add_argument("-t", "--type", default="monochromatic",
+                    choices=["monochromatic", "complement", "analogous", "triadic", "shades", "tints"])
+    pp.add_argument("-n", "--count", type=int, default=5)
 
-    m = sub.add_parser("mix", help="Blend two colors")
-    m.add_argument("color1")
-    m.add_argument("color2")
-    m.add_argument("--ratio", type=float, default=0.5)
+    cp = sub.add_parser("contrast", help="Check WCAG contrast")
+    cp.add_argument("fg")
+    cp.add_argument("bg")
 
-    p = sub.add_parser("palette", help="Generate color palette")
-    p.add_argument("color")
-    p.add_argument("count", type=int, nargs="?", default=5)
+    mp = sub.add_parser("mix", help="Mix two colors")
+    mp.add_argument("color1")
+    mp.add_argument("color2")
+    mp.add_argument("-r", "--ratio", type=int, default=50)
 
-    c = sub.add_parser("contrast", help="WCAG contrast ratio")
-    c.add_argument("fg")
-    c.add_argument("bg")
-
-    args = parser.parse_args(argv)
-    if not args.command:
-        parser.print_help()
-        return 1
-    return {"mix": cmd_mix, "palette": cmd_palette, "contrast": cmd_contrast}[args.command](args)
+    args = p.parse_args()
+    if not args.cmd:
+        p.print_help()
+        sys.exit(1)
+    {"convert": cmd_convert, "palette": cmd_palette, "contrast": cmd_contrast, "mix": cmd_mix}[args.cmd](args)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
